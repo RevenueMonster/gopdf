@@ -78,6 +78,10 @@ type GoPdf struct {
 
 	// gofpdi free pdf document importer
 	fpdi *gofpdi.Importer
+
+	//page mapping
+	pageMap   map[int]int
+	pageCount int
 }
 
 type DrawableRectOptions struct {
@@ -1518,6 +1522,11 @@ func (gp *GoPdf) getContent() *ContentObj {
 			return gp
 		})
 		gp.indexOfContent = gp.addObj(content)
+		if gp.pageMap == nil {
+			gp.pageMap = make(map[int]int)
+		}
+		gp.pageCount++
+		gp.pageMap[gp.pageCount] = gp.indexOfContent
 	} else {
 		content = gp.pdfObjs[gp.indexOfContent].(*ContentObj)
 	}
@@ -1617,6 +1626,16 @@ func (gp *GoPdf) IsCurrFontContainGlyph(r rune) (bool, error) {
 	}
 
 	return true, nil
+}
+
+//Set Current Page
+func (gp *GoPdf) SetPage(pageIndex int) {
+	gp.indexOfContent = gp.pageMap[pageIndex]
+}
+
+//Back to Latest Page
+func (gp *GoPdf) LatestPage() {
+	gp.indexOfContent = gp.pageMap[len(gp.pageMap)]
 }
 
 //tool for validate pdf https://www.pdf-online.com/osa/validate.aspx
