@@ -174,10 +174,10 @@ func (f *FontMaker) MakeDefinitionFile(gofontname string, mappath string, export
 	str += "func (me * " + gofontname + ")GetDesc() []gopdf.FontDescItem{\n"
 	str += "\treturn me.desc\n"
 	str += "}\n"
-	str += "func (me * " + gofontname + ")GetUp() int{\n"
+	str += "func (me * " + gofontname + ")GetUnderlinePosition() int{\n"
 	str += "\treturn me.up\n"
 	str += "}\n"
-	str += "func (me * " + gofontname + ")GetUt()  int{\n"
+	str += "func (me * " + gofontname + ")GetUnderlineThickness()  int{\n"
 	str += "\treturn me.ut\n"
 	str += "}\n"
 	str += "func (me * " + gofontname + ")GetCw() gopdf.FontCw{\n"
@@ -251,11 +251,14 @@ func (f *FontMaker) MakeFontDescriptor(info TtfInfo) (string, error) {
 	}
 	flags += 1 << 5
 	italicAngle, err := info.GetInt64("ItalicAngle")
+	if err != nil {
+		return "", err
+	}
 	if italicAngle != 0 {
 		flags += 1 << 6
 	}
 	fd += fmt.Sprintf("\tme.desc[3] =  gopdf.FontDescItem{ Key: \"Flags\", Val :  \"%d\" }\n", flags)
-	//fmt.Printf("\n----\n")
+
 	// FontBBox
 	fbb, err := info.GetInt64s("FontBBox")
 	if err != nil {
@@ -480,7 +483,6 @@ func (f *FontMaker) LoadMap(encodingpath string) ([]FontMap, error) {
 			return nil, err
 		}
 		name := e[2]
-		//fmt.Println("strC = "+strC+"strUv = "+strUv+" c=%d , uv= %d", c, uv)
 		fontmaps[c].Name = name
 		fontmaps[c].Uv = int(uv)
 	}

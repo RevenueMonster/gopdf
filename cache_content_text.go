@@ -4,7 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 )
+
+const defaultCoefLineHeight = float64(1)
+const defaultCoefUnderlinePosition = float64(1)
+const defaultcoefUnderlineThickness = float64(1)
 
 //ContentTypeCell cell
 const ContentTypeCell = 0
@@ -19,7 +25,7 @@ type cacheContentText struct {
 	grayFill       float64
 	txtColorMode   string
 	fontCountIndex int //Curr.FontFontCount+1
-	fontSize       int
+	fontSize       float64
 	fontStyle      int
 	setXCount      int //จำนวนครั้งที่ใช้ setX
 	x, y           float64
@@ -110,6 +116,14 @@ func (c *cacheContentText) calX() (float64, error) {
 	return 0.0, errors.New("contentType not found")
 }
 
+// FormatFloatTrim converts a float64 into a string, like Sprintf("%.3f")
+// but with trailing zeroes (and possibly ".") removed
+func FormatFloatTrim(floatval float64) (formatted string) {
+	const precisionFactor = 1000.0
+	roundedFontSize := math.Round(precisionFactor*floatval) / precisionFactor
+	return strconv.FormatFloat(roundedFontSize, 'f', -1, 64)
+}
+
 func (c *cacheContentText) write(w io.Writer, protection *PDFProtection) error {
 	r := c.textColor.r
 	g := c.textColor.g
@@ -135,7 +149,8 @@ func (c *cacheContentText) write(w io.Writer, protection *PDFProtection) error {
 	}
 
 	fmt.Fprintf(w, "%0.2f %0.2f TD\n", x, y)
-	fmt.Fprintf(w, "/F%d %d Tf\n", c.fontCountIndex, c.fontSize)
+	fmt.Fprintf(w, "/F%d %s Tf\n", c.fontCountIndex, FormatFloatTrim(c.fontSize))
+
 	if c.txtColorMode == "color" {
 		fmt.Fprintf(w, "%0.3f %0.3f %0.3f rg\n", float64(r)/255, float64(g)/255, float64(b)/255)
 	}
@@ -147,7 +162,9 @@ func (c *cacheContentText) write(w io.Writer, protection *PDFProtection) error {
 	for i, r := range c.text {
 
 		glyphindex, err := c.fontSubset.CharIndex(r)
-		if err != nil {
+		if err == ErrCharNotFound {
+			continue
+		} else if err != nil {
 			return err
 		}
 
@@ -169,8 +186,7 @@ func (c *cacheContentText) write(w io.Writer, protection *PDFProtection) error {
 	io.WriteString(w, "ET\n")
 
 	if c.fontStyle&Underline == Underline {
-		err := c.underline(w, c.x, c.y, c.x+c.cellWidthPdfUnit, c.y)
-		if err != nil {
+		if err := c.underline(w); err != nil {
 			return err
 		}
 	}
@@ -233,20 +249,42 @@ func (c *cacheContentText) drawBorder(w io.Writer) error {
 	return nil
 }
 
-func (c *cacheContentText) underline(w io.Writer, startX float64, startY float64, endX float64, endY float64) error {
-
+func (c *cacheContentText) underline(w io.Writer) error {
 	if c.fontSubset == nil {
 		return errors.New("error AppendUnderline not found font")
 	}
-	unitsPerEm := float64(c.fontSubset.ttfp.UnitsPerEm())
-	h := c.pageHeight()
-	ut := float64(c.fontSubset.GetUt())
-	up := float64(c.fontSubset.GetUp())
-	textH := ContentObjCalTextHeight(c.fontSize)
-	arg3 := float64(h) - (float64(startY) - ((up / unitsPerEm) * float64(c.fontSize))) - textH
-	arg4 := (ut / unitsPerEm) * float64(c.fontSize)
-	fmt.Fprintf(w, "%0.2f %0.2f %0.2f -%0.2f re f\n", startX, arg3, endX-startX, arg4)
-	//fmt.Printf("arg3=%f arg4=%f\n", arg3, arg4)
+
+	coefLineHeight := defaultCoefLineHeight
+	if c.cellOpt.CoefLineHeight != 0 {
+		coefLineHeight = c.cellOpt.CoefLineHeight
+	}
+
+	coefUnderlinePosition := defaultCoefUnderlinePosition
+	if c.cellOpt.CoefUnderlinePosition != 0 {
+		coefUnderlinePosition = c.cellOpt.CoefUnderlinePosition
+	}
+
+	coefUnderlineThickness := defaultcoefUnderlineThickness
+	if c.cellOpt.CoefUnderlineThickness != 0 {
+		coefUnderlineThickness = c.cellOpt.CoefUnderlineThickness
+	}
+
+	ascenderPx := c.fontSubset.GetAscenderPx(c.fontSize)
+	descenderPx := -c.fontSubset.GetDescenderPx(c.fontSize)
+
+	contentHeight := ascenderPx + descenderPx
+	virtualHeight := coefLineHeight * float64(c.fontSize)
+	leading := (contentHeight - virtualHeight) / 2
+
+	baseline := ascenderPx + leading
+
+	underlinePositionPx := c.fontSubset.GetUnderlinePositionPx(c.fontSize) * coefUnderlinePosition
+	underlineThicknessPx := c.fontSubset.GetUnderlineThicknessPx(c.fontSize) * coefUnderlineThickness
+
+	yUnderlinePosition := c.pageHeight() - c.y + underlinePositionPx - baseline
+	if _, err := fmt.Fprintf(w, "%0.2f %0.2f %0.2f %0.2f re f\n", c.x, yUnderlinePosition, c.cellWidthPdfUnit, underlineThicknessPx); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -263,7 +301,7 @@ func (c *cacheContentText) createContent() (float64, float64, error) {
 	return cellWidthPdfUnit, cellHeightPdfUnit, nil
 }
 
-func createContent(f *SubsetFontObj, text string, fontSize int, rectangle *Rect) (float64, float64, float64, error) {
+func createContent(f *SubsetFontObj, text string, fontSize float64, rectangle *Rect) (float64, float64, float64, error) {
 
 	unitsPerEm := int(f.ttfp.UnitsPerEm())
 	var leftRune rune
@@ -273,7 +311,9 @@ func createContent(f *SubsetFontObj, text string, fontSize int, rectangle *Rect)
 	for i, r := range text {
 
 		glyphindex, err := f.CharIndex(r)
-		if err != nil {
+		if err == ErrCharNotFound {
+			continue
+		} else if err != nil {
 			return 0, 0, 0, err
 		}
 
@@ -339,7 +379,7 @@ func (c *CacheContent) Setup(rectangle *Rect,
 	textColor Rgb,
 	grayFill float64,
 	fontCountIndex int, //Curr.FontFontCount+1
-	fontSize int,
+	fontSize float64,
 	fontStyle int,
 	setXCount int, //จำนวนครั้งที่ใช้ setX
 	x, y float64,
